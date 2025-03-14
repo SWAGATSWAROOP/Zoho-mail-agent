@@ -2,6 +2,7 @@ const express = require("express");
 const axios = require("axios");
 const qs = require("querystring");
 const dotenv = require("dotenv").config();
+const cheerio = require("cheerio");
 
 const app = express();
 const PORT = 3000;
@@ -167,9 +168,114 @@ app.post("/zoho/unread-emails", async (req, res) => {
     };
 
     const data = await axios.request(config);
-    return res.status(200).json({ data: data.data });
+    console.log(data.data.data);
+
+    const requiredfields = data.data?.data.map((email) => ({
+      sender: email.sender,
+      fromAddress: email.fromAddress,
+      subject: email.subject,
+      summary: email.summary,
+    }));
+    return res.status(200).json({ data: requiredfields });
   } catch (error) {
     console.error(error.message);
+    res
+      .status(error.response?.status || 500)
+      .json({ error: error.response?.data || "Internal Server Error" });
+  }
+});
+
+app.post("/zoho/get-mail-content", async (req, res) => {
+  try {
+    const zohoAPI = axios.create({
+      baseURL: "https://mail.zoho.com/api",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Connection: "keep-alive",
+      },
+    });
+
+    function extractReadableText(html) {
+      const $ = cheerio.load(html);
+      $("meta, style, script, img, link").remove();
+      let text = $("body").text();
+      text = text.replace(/\s+/g, " ").trim();
+      return text;
+    }
+
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+      return res.status(400).json({ error: "Refresh token not provided" });
+    }
+
+    const accessToken = await refreshZohoMailToken(refreshToken);
+    zohoAPI.defaults.headers[
+      "Authorization"
+    ] = `Zoho-oauthtoken ${accessToken}`;
+
+    const accountResponse = await zohoAPI.get("/accounts");
+    const accountData = accountResponse.data?.data?.[0];
+
+    if (!accountData)
+      return res.status(400).json({ error: "No Zoho mail account found" });
+
+    const accountId = accountData.accountId;
+    console.log("Account ID:", accountId);
+
+    const messagesResponse = await zohoAPI.get(
+      `/accounts/${accountId}/messages/view?limit=5&status=unread`
+    );
+    const emailsData = messagesResponse.data?.data;
+
+    if (!emailsData || emailsData.length === 0) {
+      return res
+        .status(200)
+        .json({ message: "No unread emails found", data: [] });
+    }
+
+    const emailRequests = emailsData.map((email) => ({
+      messageId: email.messageId,
+      folderId: email.folderId,
+      sender: email.sender,
+      fromAddress: email.fromAddress,
+      subject: email.subject,
+    }));
+
+    const emailContents = await Promise.allSettled(
+      emailRequests.map(async (email) => {
+        try {
+          const contentResponse = await zohoAPI.get(
+            `/accounts/${accountId}/folders/${email.folderId}/messages/${email.messageId}/content`
+          );
+          return {
+            mailContent: extractReadableText(contentResponse.data.data.content),
+            sender: email.sender,
+            fromAddress: email.fromAddress,
+            subject: email.subject,
+          };
+        } catch (error) {
+          console.error(
+            `Error fetching content for messageId: ${email.messageId}`,
+            error.message
+          );
+          return {
+            mailContent: "Error fetching email content",
+            sender: email.sender,
+            fromAddress: email.fromAddress,
+            subject: email.subject,
+          };
+        }
+      })
+    );
+
+    const emails = emailContents
+      .filter((result) => result.status === "fulfilled")
+      .map((result) => result.value);
+
+    return res.status(200).json({ data: emails });
+  } catch (error) {
+    console.error("Error:", error.message);
     res
       .status(error.response?.status || 500)
       .json({ error: error.response?.data || "Internal Server Error" });
