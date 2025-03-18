@@ -133,9 +133,9 @@ app.post("/zoho/send-email", async (req, res) => {
   }
 });
 
-app.post("/zoho/unread-emails", async (req, res) => {
+app.post("/zoho/list-emails", async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    const { refreshToken, status } = req.body;
     if (!refreshToken) {
       return res.status(400).json({ error: "Access token not provided" });
     }
@@ -159,7 +159,7 @@ app.post("/zoho/unread-emails", async (req, res) => {
     let config = {
       method: "get",
       maxBodyLength: Infinity,
-      url: `https://mail.zoho.com/api/accounts/${accountid}/messages/view?limit=20&status=unread`,
+      url: `https://mail.zoho.com/api/accounts/${accountid}/messages/view?limit=20&status=${status}`,
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
@@ -204,7 +204,7 @@ app.post("/zoho/get-mail-content", async (req, res) => {
       return text;
     }
 
-    const { refreshToken } = req.body;
+    const { refreshToken, status } = req.body;
     if (!refreshToken) {
       return res.status(400).json({ error: "Refresh token not provided" });
     }
@@ -224,7 +224,7 @@ app.post("/zoho/get-mail-content", async (req, res) => {
     console.log("Account ID:", accountId);
 
     const messagesResponse = await zohoAPI.get(
-      `/accounts/${accountId}/messages/view?limit=5&status=unread`
+      `/accounts/${accountId}/messages/view?limit=5&status=${status}`
     );
     const emailsData = messagesResponse.data?.data;
 
